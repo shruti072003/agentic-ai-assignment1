@@ -5,6 +5,6 @@
 # max_tokens must sit below the harness ceiling in settings.yaml
 # (session_token_ceiling), so that your loop, not the harness, ends the run.
 
-max_steps: 0        # why:
-max_tokens: 0       # why:
-wall_clock_s: 0     # why:
+max_steps: 12       # why: a good run is read, 2-5 searches, post, stop (about 6 calls); 12 leaves room for a second round of searching, and past that the agent is circling
+max_tokens: 60000   # why: about three times my estimated worst case at 12 steps (~20k prompt tokens), so it only binds if searches return far more text than expected, and under the 400k harness ceiling
+wall_clock_s: 180   # why: a normal run is under 30s; 180s allows for rate-limit retries the harness waits out, and caps a stuck run at three minutes

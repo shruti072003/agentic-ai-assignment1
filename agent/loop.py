@@ -32,10 +32,13 @@ before its next call.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from harness.client import tool_result
 
 
 @dataclass(frozen=True)
@@ -51,4 +54,47 @@ def load_bounds(path: Path | str = Path(__file__).parent / "bounds.yaml") -> Bou
 
 
 def run_loop(client, tools, system: str, user_message: str, bounds: Bounds, trace) -> str:
-    raise NotImplementedError("Assignment 1 Part A: write the loop")
+    messages = [{"role": "user", "content": user_message}]
+    started = time.monotonic()
+    step = 0
+    last_text = ""
+
+    while True:
+        if step >= bounds.max_steps:
+            trace.end("turn_limit", f"{step} model calls")
+            return last_text
+        if client.total_tokens >= bounds.max_tokens:
+            trace.end("token_budget", f"{client.total_tokens} >= {bounds.max_tokens} tokens")
+            return last_text
+        elapsed = time.monotonic() - started
+        if elapsed >= bounds.wall_clock_s:
+            trace.end("wall_clock", f"{elapsed:.1f}s >= {bounds.wall_clock_s}s")
+            return last_text
+
+        step += 1
+        response = client.create(system=system, messages=messages, tools=tools.schemas)
+        trace.model_call(step, response)
+        messages.append(response.assistant_message())
+        last_text = response.text or last_text
+
+        if response.stop_reason == "refusal":
+            trace.end("refusal", "the model declined")
+            return last_text
+        calls = response.tool_calls
+        if not calls:
+            trace.end("model_stopped", f"stop_reason {response.stop_reason}")
+            return last_text
+
+        results = []
+        for call in calls:
+            try:
+                result = tools.call(call.name, call.input)
+            except Exception as exc:
+                trace.end("tool_error", f"{call.name}: {type(exc).__name__}: {exc}")
+                return last_text
+            trace.tool_call(step, call, result)
+            results.append(tool_result(call, result.content, result.is_error))
+        # tells the model how many calls remain
+        left = bounds.max_steps - step
+        results.append({"type": "text", "text": f"[harness] {left} model call{'s' if left != 1 else ''} left in this run."})
+        messages.append({"role": "user", "content": results})
